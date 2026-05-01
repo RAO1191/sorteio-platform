@@ -52,6 +52,9 @@ document.getElementById('file-input').addEventListener('change', e => {
       store.loadRows(rows);
       raffle.reset();
       currentGrpResult = null;
+      saveParticipants();
+      localStorage.removeItem(LS_DISTRIBUTION);
+      localStorage.removeItem(LS_RAFFLE);
       renderDataTab();
       refreshRaffleView();
       refreshGroupsView();
@@ -345,6 +348,7 @@ function finishDraw(pool) {
   renderDrawnList();
   updateRaffleInfo();
   updateDrawBtn();
+  saveRaffleHistory();
 }
 
 // ── GROUPS TAB ────────────────────────────────────────────────────────────────
@@ -423,6 +427,7 @@ function runDistribution() {
     const names  = getGroupNames();
     const result = grp.distribute(filtered, numGroups, names);
     currentGrpResult = result;
+    saveDistribution();
     renderGroupsResult(result);
   } catch (err) {
     alert(err.message);
@@ -536,6 +541,115 @@ function esc(str) {
     .replace(/"/g, '&quot;');
 }
 
+// ── Persistência localStorage ─────────────────────────────────────────────────
+const LS_PARTICIPANTS  = 'sorteio_participants';
+const LS_DISTRIBUTION  = 'sorteio_last_distribution';
+const LS_RAFFLE        = 'sorteio_raffle_history';
+
+function saveParticipants() {
+  try {
+    localStorage.setItem(LS_PARTICIPANTS, JSON.stringify(store.participants));
+  } catch(e) { console.warn('localStorage cheio:', e); }
+}
+
+function saveDistribution() {
+  if (!currentGrpResult) return;
+  try {
+    // Sets não são serializáveis → converter para Array
+    const serializable = {
+      ...currentGrpResult,
+      savedAt: new Date().toISOString(),
+      groups: currentGrpResult.groups.map(g => ({
+        ...g,
+        vouchers: [...g.vouchers]
+      }))
+    };
+    localStorage.setItem(LS_DISTRIBUTION, JSON.stringify(serializable));
+  } catch(e) { console.warn('Erro ao salvar distribuição:', e); }
+}
+
+function saveRaffleHistory() {
+  try {
+    localStorage.setItem(LS_RAFFLE, JSON.stringify({
+      history:  raffle.history,
+      drawnIds: [...raffle.drawnIds]
+    }));
+  } catch(e) {}
+}
+
+function loadFromStorage() {
+  // Restaurar participantes
+  try {
+    const raw = localStorage.getItem(LS_PARTICIPANTS);
+    if (raw) {
+      const people = JSON.parse(raw);
+      if (Array.isArray(people) && people.length > 0) {
+        store.participants = people;
+        store._nextId = Math.max(...people.map(p => p.id)) + 1;
+        renderDataTab();
+        updateHeaderInfo();
+      }
+    }
+  } catch(e) {}
+
+  // Restaurar última distribuição
+  try {
+    const raw = localStorage.getItem(LS_DISTRIBUTION);
+    if (raw) {
+      const data = JSON.parse(raw);
+      // Reconverter Arrays de volta para Set
+      data.groups = data.groups.map(g => ({ ...g, vouchers: new Set(g.vouchers) }));
+      currentGrpResult = data;
+
+      // Mostrar banner de restauração
+      const ts = data.savedAt ? new Date(data.savedAt).toLocaleString('pt-BR') : '';
+      showRestoreBanner(`Último sorteio de grupos restaurado (salvo em ${ts})`);
+
+      refreshGroupsView();
+      if (store.participants.length > 0) renderGroupsResult(currentGrpResult);
+    }
+  } catch(e) {}
+
+  // Restaurar histórico de brinde
+  try {
+    const raw = localStorage.getItem(LS_RAFFLE);
+    if (raw) {
+      const data = JSON.parse(raw);
+      raffle.history  = data.history  || [];
+      raffle.drawnIds = new Set(data.drawnIds || []);
+    }
+  } catch(e) {}
+}
+
+function showRestoreBanner(msg) {
+  let banner = document.getElementById('restore-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'restore-banner';
+    banner.style.cssText = 'background:#e8f0fc;border:1px solid #c2d4f5;border-radius:8px;padding:10px 16px;font-size:13px;color:#1a4480;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;';
+    const groupsWrap = document.getElementById('groups-wrap');
+    groupsWrap.prepend(banner);
+  }
+  banner.innerHTML = `<span>♻ ${msg}</span>
+    <button onclick="clearStorage()" style="background:none;border:none;color:#cf222e;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap;">✕ Limpar cache</button>`;
+}
+
+function clearStorage() {
+  localStorage.removeItem(LS_PARTICIPANTS);
+  localStorage.removeItem(LS_DISTRIBUTION);
+  localStorage.removeItem(LS_RAFFLE);
+  store.clear();
+  raffle.reset();
+  currentGrpResult = null;
+  document.getElementById('restore-banner')?.remove();
+  renderDataTab();
+  refreshRaffleView();
+  refreshGroupsView();
+  updateHeaderInfo();
+  document.getElementById('g-result-placeholder').classList.remove('hidden');
+  document.getElementById('g-result-content').classList.add('hidden');
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
-renderDataTab();
+loadFromStorage();
 renderGroupNameInputs();
