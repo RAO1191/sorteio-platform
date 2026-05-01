@@ -165,9 +165,15 @@ pSearch.addEventListener('input', e => { raffleSearchTerm = e.target.value.toLow
 document.getElementById('reset-raffle-btn').addEventListener('click', () => {
   if (!confirm('Reiniciar o sorteio? Todos os nomes sorteados serão removidos da lista de sorteados.')) return;
   raffle.reset();
+  saveRaffleHistory();
   resetDrawDisplay();
   refreshRaffleView();
+  document.getElementById('raffle-restore-banner').classList.add('hidden');
 });
+
+document.getElementById('clear-all-btn').addEventListener('click', clearAll);
+
+document.getElementById('export-raffle-history-btn').addEventListener('click', exportRaffleHistoryXLSX);
 
 document.getElementById('draw-btn').addEventListener('click', startDraw);
 
@@ -479,6 +485,33 @@ function renderGroupsResult(result) {
   }).join('');
 }
 
+function exportRaffleHistoryXLSX() {
+  if (raffle.history.length === 0) { alert('Nenhum sorteio realizado ainda.'); return; }
+
+  const wb = XLSX.utils.book_new();
+  const rows = [['#', 'Nome', 'Gênero', 'Idade', 'Tipo', 'Voucher', 'Brinde', 'Hora']];
+
+  for (const h of raffle.history) {
+    rows.push([
+      h.num,
+      h.name,
+      h.gender === 'M' ? 'Masculino' : h.gender === 'F' ? 'Feminino' : '',
+      h.age || '',
+      h.tipo2 || '',
+      h.voucher || '',
+      h.prize || '',
+      h.time
+    ]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [5, 38, 12, 8, 12, 16, 25, 10].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Sorteados');
+
+  const date = new Date().toLocaleDateString('pt-BR').replace(/\//g, '-');
+  XLSX.writeFile(wb, `sorteio_brinde_${date}.xlsx`);
+}
+
 function exportGroupsXLSX() {
   if (!currentGrpResult) return;
 
@@ -542,9 +575,9 @@ function esc(str) {
 }
 
 // ── Persistência localStorage ─────────────────────────────────────────────────
-const LS_PARTICIPANTS  = 'sorteio_participants';
-const LS_DISTRIBUTION  = 'sorteio_last_distribution';
-const LS_RAFFLE        = 'sorteio_raffle_history';
+const LS_PARTICIPANTS = 'sorteio_participants';
+const LS_DISTRIBUTION = 'sorteio_last_distribution';
+const LS_RAFFLE       = 'sorteio_raffle_history';
 
 function saveParticipants() {
   try {
@@ -555,30 +588,27 @@ function saveParticipants() {
 function saveDistribution() {
   if (!currentGrpResult) return;
   try {
-    // Sets não são serializáveis → converter para Array
     const serializable = {
       ...currentGrpResult,
       savedAt: new Date().toISOString(),
-      groups: currentGrpResult.groups.map(g => ({
-        ...g,
-        vouchers: [...g.vouchers]
-      }))
+      groups: currentGrpResult.groups.map(g => ({ ...g, vouchers: [...g.vouchers] }))
     };
     localStorage.setItem(LS_DISTRIBUTION, JSON.stringify(serializable));
-  } catch(e) { console.warn('Erro ao salvar distribuição:', e); }
+  } catch(e) {}
 }
 
 function saveRaffleHistory() {
   try {
     localStorage.setItem(LS_RAFFLE, JSON.stringify({
       history:  raffle.history,
-      drawnIds: [...raffle.drawnIds]
+      drawnIds: [...raffle.drawnIds],
+      savedAt:  new Date().toISOString()
     }));
   } catch(e) {}
 }
 
 function loadFromStorage() {
-  // Restaurar participantes
+  // ── Participantes ──────────────────────────────────────────────────────────
   try {
     const raw = localStorage.getItem(LS_PARTICIPANTS);
     if (raw) {
@@ -592,62 +622,81 @@ function loadFromStorage() {
     }
   } catch(e) {}
 
-  // Restaurar última distribuição
-  try {
-    const raw = localStorage.getItem(LS_DISTRIBUTION);
-    if (raw) {
-      const data = JSON.parse(raw);
-      // Reconverter Arrays de volta para Set
-      data.groups = data.groups.map(g => ({ ...g, vouchers: new Set(g.vouchers) }));
-      currentGrpResult = data;
-
-      // Mostrar banner de restauração
-      const ts = data.savedAt ? new Date(data.savedAt).toLocaleString('pt-BR') : '';
-      showRestoreBanner(`Último sorteio de grupos restaurado (salvo em ${ts})`);
-
-      refreshGroupsView();
-      if (store.participants.length > 0) renderGroupsResult(currentGrpResult);
-    }
-  } catch(e) {}
-
-  // Restaurar histórico de brinde
+  // ── Histórico de brinde ────────────────────────────────────────────────────
   try {
     const raw = localStorage.getItem(LS_RAFFLE);
     if (raw) {
       const data = JSON.parse(raw);
       raffle.history  = data.history  || [];
       raffle.drawnIds = new Set(data.drawnIds || []);
+
+      if (raffle.history.length > 0) {
+        const ts  = data.savedAt ? new Date(data.savedAt).toLocaleString('pt-BR') : '';
+        const banner = document.getElementById('raffle-restore-banner');
+        const msg    = document.getElementById('raffle-restore-msg');
+        if (banner && msg) {
+          msg.innerHTML = `♻ <strong>${raffle.history.length} nomes sorteados</strong> salvos da última sessão${ts ? ' — ' + ts : ''}`;
+          banner.classList.remove('hidden');
+        }
+      }
+    }
+  } catch(e) {}
+
+  // ── Última distribuição de grupos ──────────────────────────────────────────
+  try {
+    const raw = localStorage.getItem(LS_DISTRIBUTION);
+    if (raw) {
+      const data = JSON.parse(raw);
+      data.groups = data.groups.map(g => ({ ...g, vouchers: new Set(g.vouchers) }));
+      currentGrpResult = data;
+
+      // Banner no tab de grupos
+      const ts = data.savedAt ? new Date(data.savedAt).toLocaleString('pt-BR') : '';
+      showGroupsRestoreBanner(`Última distribuição restaurada — salva em ${ts}`);
+
+      if (store.participants.length > 0) renderGroupsResult(currentGrpResult);
     }
   } catch(e) {}
 }
 
-function showRestoreBanner(msg) {
-  let banner = document.getElementById('restore-banner');
+function showGroupsRestoreBanner(msg) {
+  let banner = document.getElementById('groups-restore-banner');
   if (!banner) {
     banner = document.createElement('div');
-    banner.id = 'restore-banner';
-    banner.style.cssText = 'background:#e8f0fc;border:1px solid #c2d4f5;border-radius:8px;padding:10px 16px;font-size:13px;color:#1a4480;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;';
+    banner.id = 'groups-restore-banner';
+    banner.className = 'restore-banner';
     const groupsWrap = document.getElementById('groups-wrap');
     groupsWrap.prepend(banner);
   }
   banner.innerHTML = `<span>♻ ${msg}</span>
-    <button onclick="clearStorage()" style="background:none;border:none;color:#cf222e;cursor:pointer;font-size:12px;font-weight:600;white-space:nowrap;">✕ Limpar cache</button>`;
+    <button class="btn btn-ghost btn-danger btn-sm" onclick="clearAll()">🗑 Limpar tudo e reimportar</button>`;
 }
 
-function clearStorage() {
+function clearAll() {
+  if (!confirm('Limpar todos os dados salvos e começar do zero?')) return;
   localStorage.removeItem(LS_PARTICIPANTS);
   localStorage.removeItem(LS_DISTRIBUTION);
   localStorage.removeItem(LS_RAFFLE);
+
   store.clear();
   raffle.reset();
   currentGrpResult = null;
-  document.getElementById('restore-banner')?.remove();
+
+  // Esconder banners
+  document.getElementById('raffle-restore-banner')?.classList.add('hidden');
+  document.getElementById('groups-restore-banner')?.remove();
+
+  // Resetar UI
   renderDataTab();
   refreshRaffleView();
   refreshGroupsView();
   updateHeaderInfo();
+  resetDrawDisplay();
   document.getElementById('g-result-placeholder').classList.remove('hidden');
   document.getElementById('g-result-content').classList.add('hidden');
+
+  // Ir para aba de importar
+  switchTab('data');
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
