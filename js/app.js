@@ -357,7 +357,7 @@ document.getElementById('g-plus').addEventListener('click',  () => { if (numGrou
 
 document.getElementById('distribute-btn').addEventListener('click', runDistribution);
 document.getElementById('g-redo-btn').addEventListener('click', runDistribution);
-document.getElementById('g-export-btn').addEventListener('click', exportGroupsCSV);
+document.getElementById('g-export-btn').addEventListener('click', exportGroupsXLSX);
 document.getElementById('g-print-btn').addEventListener('click', () => window.print());
 
 function refreshGroupsView() {
@@ -474,15 +474,57 @@ function renderGroupsResult(result) {
   }).join('');
 }
 
-function exportGroupsCSV() {
+function exportGroupsXLSX() {
   if (!currentGrpResult) return;
-  const csv  = grp.exportCSV(currentGrpResult);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url; a.download = 'grupos_sorteio.csv';
-  a.click();
-  URL.revokeObjectURL(url);
+
+  const wb = XLSX.utils.book_new();
+  const header = ['Grupo', 'Gênero', 'Nome', 'Idade', 'Voucher', 'Tipo', 'E-mail', 'Telefone'];
+
+  // ── Aba 1: todos os grupos numa planilha ──────────────────────────────────
+  const allRows = [header];
+  for (const g of currentGrpResult.groups) {
+    for (const m of g.members) {
+      allRows.push([
+        g.name,
+        m.gender === 'M' ? 'Masculino' : m.gender === 'F' ? 'Feminino' : '',
+        m.name,
+        m.age !== null ? m.age : '',
+        m.voucher  || '',
+        m.tipo2    || '',
+        m.email    || '',
+        m.telefone || ''
+      ]);
+    }
+  }
+  const wsAll = XLSX.utils.aoa_to_sheet(allRows);
+  wsAll['!cols'] = [14, 12, 38, 8, 16, 12, 32, 16].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, wsAll, 'Todos os Grupos');
+
+  // ── Abas individuais por grupo ────────────────────────────────────────────
+  const subHeader = ['Gênero', 'Nome', 'Idade', 'Nascimento', 'Voucher', 'Tipo', 'E-mail', 'Telefone'];
+  for (const g of currentGrpResult.groups) {
+    const rows = [subHeader];
+    for (const m of g.members) {
+      rows.push([
+        m.gender === 'M' ? 'Masculino' : m.gender === 'F' ? 'Feminino' : '',
+        m.name,
+        m.age !== null ? m.age : '',
+        m.nascimento || '',
+        m.voucher    || '',
+        m.tipo2      || '',
+        m.email      || '',
+        m.telefone   || ''
+      ]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [12, 38, 8, 12, 16, 12, 32, 16].map(w => ({ wch: w }));
+    // Sheet name max 31 chars
+    const sheetName = g.name.substring(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+
+  const date = new Date().toLocaleDateString('pt-BR').replace(/\//g, '-');
+  XLSX.writeFile(wb, `grupos_sorteio_${date}.xlsx`);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
